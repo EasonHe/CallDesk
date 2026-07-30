@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5DDD7647301B465B00466E74 /* AGENTS.md in Sources */ = {isa = PBXBuildFile; fileRef = 5DDD7646301B464200466E74 /* AGENTS.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		5DDD7629301B44E500466E74 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,7 @@
 		5DDD7617301B44E100466E74 /* CallDesk.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CallDesk.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DDD7628301B44E500466E74 /* CallDeskTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CallDeskTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DDD7632301B44E500466E74 /* CallDeskUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CallDeskUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5DDD7646301B464200466E74 /* AGENTS.md */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AGENTS.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -88,6 +93,7 @@
 		5DDD760E301B44E000466E74 = {
 			isa = PBXGroup;
 			children = (
+				5DDD7646301B464200466E74 /* AGENTS.md */,
 				5DDD7619301B44E100466E74 /* CallDesk */,
 				5DDD762B301B44E500466E74 /* CallDeskTests */,
 				5DDD7635301B44E500466E74 /* CallDeskUITests */,
@@ -249,6 +255,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5DDD7647301B465B00466E74 /* AGENTS.md in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

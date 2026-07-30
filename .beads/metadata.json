@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "CallDesk",
+  "project_id": "e669d49c-e50c-4f07-987b-7274ac8e5126"
+}

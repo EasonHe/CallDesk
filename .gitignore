@@ -4,3 +4,10 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Local macOS metadata and Xcode build output
+.DS_Store
+/build/
+
+# Visual brainstorming mockups (local only, not part of the app)
+.superpowers/

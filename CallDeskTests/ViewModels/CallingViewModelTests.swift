@@ -66,6 +66,33 @@ struct CallingViewModelTests {
         #expect(content.actions.isEmpty)
     }
 
+    @Test("Loading the panel does not wait for restoring the undo target")
+    func loadDoesNotWaitForHistoryRestore() async throws {
+        let fixture = try Fixture()
+        let repositories = fixture.repositories
+        let callService = DefaultCallService(
+            actions: repositories.actions,
+            history: repositories.history,
+            speechDriver: SilentCallSpeechDriver(utteranceDuration: 0)
+        )
+        let viewModel = CallingViewModel(
+            workspaces: repositories.workspaces,
+            boards: repositories.boards,
+            actions: repositories.actions,
+            callService: callService,
+            history: DelayedHistoryRepository()
+        )
+
+        let loadTask = Task {
+            await viewModel.refresh()
+        }
+
+        #expect(await waitForLoadedContent(of: viewModel))
+
+        loadTask.cancel()
+        await loadTask.value
+    }
+
     @Test("Selecting another board replaces the visible actions")
     func selectBoardReplacesVisibleActions() async throws {
         let fixture = try Fixture()
@@ -841,6 +868,21 @@ struct CallingViewModelTests {
         return content
     }
 
+    /// The loading task runs concurrently with this test. Polling the actual
+    /// state avoids making the test depend on scheduler timing under a full,
+    /// parallel test run.
+    private func waitForLoadedContent(of viewModel: CallingViewModel) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while clock.now < deadline {
+            if loadedContent(of: viewModel) != nil {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
     @MainActor
     private struct Fixture {
         static let workspaceID = fixedUUID(1)
@@ -972,4 +1014,21 @@ private nonisolated struct FailingSpeechDriver: CallSpeechDriving {
     ) async throws {
         throw DriverError()
     }
+}
+
+private nonisolated struct DelayedHistoryRepository: CallHistoryRepository {
+    func save(_ record: CallRecord) async throws {}
+
+    func record(id: UUID) async throws -> CallRecord? { nil }
+
+    func fetch(_ filter: CallHistoryFilter) async throws -> [CallRecord] {
+        try? await Task.sleep(for: .seconds(10))
+        return []
+    }
+
+    func delete(ids: Set<UUID>) async throws {}
+
+    func deleteAll() async throws {}
+
+    func enforceRetention(_ policy: HistoryRetentionPolicy, now: Date) async throws -> Int { 0 }
 }

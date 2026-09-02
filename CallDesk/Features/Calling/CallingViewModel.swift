@@ -184,16 +184,34 @@ final class CallingViewModel: ObservableObject {
     }
 
     func load() async {
+        await load(restoringUndoTargetBeforeContent: true)
+    }
+
+    private func load(restoringUndoTargetBeforeContent: Bool) async {
         hasLoaded = true
         state = .loading
+        os_log(.info, log: Self.loadLog, "calling-load: started")
         // Restore which tiles were already announced on a previous run so a
         // fresh session does not lose the called progress. Opening the app
         // on a new day yields an empty set, so yesterday's markers drop
         // here automatically.
         calledActionIDs = calledMarkers.load()
-        await restoreLastCompletedCall()
+        os_log(.info, log: Self.loadLog, "calling-load: restored called markers")
+        if restoringUndoTargetBeforeContent {
+            await restoreLastCompletedCall()
+        }
         await reloadContent()
         scheduleMidnightResetIfNeeded()
+
+        if !restoringUndoTargetBeforeContent {
+            // The undo target is helpful after a relaunch, but it must never
+            // keep the primary calling surface behind a loading indicator.
+            // Run it after the board has been rendered so a slow or unavailable
+            // history store cannot block first use.
+            Task { [weak self] in
+                await self?.restoreLastCompletedCall()
+            }
+        }
     }
 
     /// Restores the undo target from persisted history so a relaunch keeps
@@ -224,12 +242,13 @@ final class CallingViewModel: ObservableObject {
     }
 
     private nonisolated static let log = OSLog(subsystem: "io.wayneho.CallDesk", category: "UndoRestore")
+    private nonisolated static let loadLog = OSLog(subsystem: "io.wayneho.CallDesk", category: "CallingLoad")
 
     /// Reloads data without flashing the loading state, so returning to the
     /// tab picks up board and action changes made on the Boards tab.
     func refresh() async {
         guard hasLoaded else {
-            await load()
+            await load(restoringUndoTargetBeforeContent: false)
             return
         }
         // The store drops markers recorded on a previous day, so coming
@@ -293,23 +312,32 @@ final class CallingViewModel: ObservableObject {
 
     private func reloadContent() async {
         do {
-            guard let workspace = try await workspaces.fetchAll().first else {
+            os_log(.info, log: Self.loadLog, "calling-load: fetching workspaces")
+            let workspaces = try await workspaces.fetchAll()
+            os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld workspaces", workspaces.count)
+            guard let workspace = workspaces.first else {
+                os_log(.info, log: Self.loadLog, "calling-load: no workspace")
                 state = .empty
                 return
             }
+            os_log(.info, log: Self.loadLog, "calling-load: fetching boards")
             let visibleBoards = try await boards.fetchAll(
                 workspaceID: workspace.id,
                 includeArchived: false
             )
+            os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld boards", visibleBoards.count)
             guard let firstBoard = visibleBoards.first else {
+                os_log(.info, log: Self.loadLog, "calling-load: no board")
                 state = .empty
                 return
             }
             let selectedBoardID = retainedSelectedBoardID(in: visibleBoards) ?? firstBoard.id
+            os_log(.info, log: Self.loadLog, "calling-load: fetching actions")
             let boardActions = try await actions.fetch(
                 boardID: selectedBoardID,
                 includeDisabled: true
             )
+            os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld actions", boardActions.count)
             state = .loaded(
                 Content(
                     workspaceName: workspace.name,
@@ -319,6 +347,7 @@ final class CallingViewModel: ObservableObject {
                 )
             )
         } catch {
+            os_log(.error, log: Self.loadLog, "calling-load: failed: %{public}@", "\(error)")
             state = .failed
         }
     }

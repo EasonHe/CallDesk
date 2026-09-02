@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 import Testing
 @testable import CallDesk
@@ -132,6 +133,25 @@ struct CoreDataCallHistoryRepositoryTests {
         #expect(try await history.fetch(.all).map(\.id) == [firstTieID, secondTieID, olderID])
     }
 
+    @Test("A limited fetch does not materialize records beyond its result window")
+    func limitedFetchDoesNotMaterializeOlderRecords() async throws {
+        let context = CoreDataTestContext()
+        let history = context.repositories.history
+        let newest = try makeRecord(id: coreDataFixedUUID(30), startedAt: 200)
+        try await history.save(newest)
+
+        try await context.persistence.container.viewContext.perform {
+            let invalidOlderRecord = CDCallRecord(context: context.persistence.container.viewContext)
+            invalidOlderRecord.apply(try self.makeRecord(id: coreDataFixedUUID(31), startedAt: 100))
+            invalidOlderRecord.repeatIndex = -1
+            try context.persistence.container.viewContext.save()
+        }
+
+        let latestOnly = try CallHistoryFilter(results: [.completed], limit: 1)
+
+        #expect(try await history.fetch(latestOnly) == [newest])
+    }
+
     @Test("Bulk deletion ignores absent IDs and delete all removes every record")
     func bulkDeletionAndDeleteAll() async throws {
         let context = CoreDataTestContext()
@@ -166,6 +186,29 @@ struct CoreDataCallHistoryRepositoryTests {
 
         #expect(removed == 2)
         #expect(try await history.fetch(.all).map(\.id) == [newestID])
+    }
+
+    @Test("Retention deletes records without materializing their domain values")
+    func retentionDoesNotMaterializeRecords() async throws {
+        let context = CoreDataTestContext()
+        let history = context.repositories.history
+        let newest = try makeRecord(id: coreDataFixedUUID(32), startedAt: 200)
+        try await history.save(newest)
+
+        try await context.persistence.container.viewContext.perform {
+            let invalidOlderRecord = CDCallRecord(context: context.persistence.container.viewContext)
+            invalidOlderRecord.apply(try self.makeRecord(id: coreDataFixedUUID(33), startedAt: 100))
+            invalidOlderRecord.repeatIndex = -1
+            try context.persistence.container.viewContext.save()
+        }
+
+        let removed = try await history.enforceRetention(
+            try HistoryRetentionPolicy(maximumRecordCount: 1),
+            now: Date(timeIntervalSinceReferenceDate: 300)
+        )
+
+        #expect(removed == 1)
+        #expect(try await history.fetch(.all) == [newest])
     }
 
     private func makeRecord(

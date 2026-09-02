@@ -242,15 +242,15 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
 
     func fetchRecords(_ filter: CallHistoryFilter) async throws -> [CallRecord] {
         try await performRead {
-            let records = try self.allDomainRecords().filter {
-                RepositoryDataRules.matches($0, filter: filter)
-            }
-            let sortedRecords = RepositoryDataRules.sortedRecords(records)
-
-            if let limit = filter.limit {
-                return Array(sortedRecords.prefix(limit))
-            }
-            return sortedRecords
+            let request = NSFetchRequest<CDCallRecord>(entityName: "CDCallRecord")
+            request.predicate = self.recordPredicate(for: filter)
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "startedAt", ascending: false),
+                NSSortDescriptor(key: "id", ascending: true)
+            ]
+            request.fetchLimit = filter.limit ?? 0
+            request.fetchBatchSize = filter.limit ?? 100
+            return try self.context.fetch(request).map { try $0.domainValue() }
         }
     }
 
@@ -270,13 +270,38 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
 
     func enforceHistoryRetention(_ policy: HistoryRetentionPolicy, now: Date) async throws -> Int {
         try await performWrite {
-            let recordIDsToDelete = RepositoryDataRules.retentionDeletionIDs(
-                records: try self.allDomainRecords(),
-                policy: policy,
-                now: now
-            )
-            try self.deleteRecordEntities(ids: recordIDsToDelete)
-            return recordIDsToDelete.count
+            var objectIDsToDelete = Set<NSManagedObjectID>()
+            var retainedRecordPredicate: NSPredicate?
+
+            if let retentionDays = policy.retentionDays {
+                let cutoff = now.addingTimeInterval(
+                    -TimeInterval(retentionDays) * RepositoryDataRules.secondsPerDay
+                )
+                objectIDsToDelete.formUnion(
+                    try self.recordObjectIDs(
+                        predicate: NSPredicate(format: "startedAt < %@", cutoff as NSDate)
+                    )
+                )
+                retainedRecordPredicate = NSPredicate(format: "startedAt >= %@", cutoff as NSDate)
+            }
+
+            if let maximumRecordCount = policy.maximumRecordCount {
+                objectIDsToDelete.formUnion(
+                    try self.recordObjectIDs(
+                        predicate: retainedRecordPredicate,
+                        sortDescriptors: [
+                            NSSortDescriptor(key: "startedAt", ascending: false),
+                            NSSortDescriptor(key: "id", ascending: true)
+                        ],
+                        fetchOffset: maximumRecordCount
+                    )
+                )
+            }
+
+            for objectID in objectIDsToDelete {
+                self.context.delete(self.context.object(with: objectID))
+            }
+            return objectIDsToDelete.count
         }
     }
 
@@ -439,6 +464,54 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
 
     private func allDomainRecords() throws -> [CallRecord] {
         try entities(CDCallRecord.self).map { try $0.domainValue() }
+    }
+
+    private func recordPredicate(for filter: CallHistoryFilter) -> NSPredicate? {
+        var predicates: [NSPredicate] = []
+        if let startedFrom = filter.startedFrom {
+            predicates.append(NSPredicate(format: "startedAt >= %@", startedFrom as NSDate))
+        }
+        if let startedThrough = filter.startedThrough {
+            predicates.append(NSPredicate(format: "startedAt <= %@", startedThrough as NSDate))
+        }
+        if let boardID = filter.boardID {
+            predicates.append(NSPredicate(format: "boardID == %@", boardID as CVarArg))
+        }
+        if let actionID = filter.actionID {
+            predicates.append(NSPredicate(format: "actionID == %@", actionID as CVarArg))
+        }
+        if !filter.results.isEmpty {
+            predicates.append(
+                NSPredicate(format: "resultRawValue IN %@", filter.results.map(\.rawValue))
+            )
+        }
+        if let searchText = filter.searchText {
+            predicates.append(
+                NSCompoundPredicate(
+                    orPredicateWithSubpredicates: [
+                        NSPredicate(format: "actionTitleSnapshot CONTAINS[cd] %@", searchText),
+                        NSPredicate(format: "spokenTextSnapshot CONTAINS[cd] %@", searchText)
+                    ]
+                )
+            )
+        }
+        guard !predicates.isEmpty else {
+            return nil
+        }
+        return NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+    }
+
+    private func recordObjectIDs(
+        predicate: NSPredicate?,
+        sortDescriptors: [NSSortDescriptor] = [],
+        fetchOffset: Int = 0
+    ) throws -> Set<NSManagedObjectID> {
+        let request = NSFetchRequest<NSFetchRequestResult>(entityName: "CDCallRecord")
+        request.predicate = predicate
+        request.sortDescriptors = sortDescriptors
+        request.fetchOffset = fetchOffset
+        request.resultType = .managedObjectIDResultType
+        return Set(try context.fetch(request).compactMap { $0 as? NSManagedObjectID })
     }
 
     // MARK: - Shared mutation helpers

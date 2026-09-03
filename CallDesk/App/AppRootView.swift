@@ -60,11 +60,15 @@ struct AppRootView: View {
             appearance = settings.display.appearance
         }
         .onChange(of: selectedTab) { newTab in
-            // Returning to the calling or statistics tab must pick up board
-            // and action changes made from the other tabs.
-            if newTab == .calling || newTab == .statistics {
+            // Only the visible tab may start a repository refresh. On iOS
+            // 16, eagerly refreshing the hidden calling tab while loading
+            // Statistics made multiple screens contend for one Core Data
+            // background context during startup.
+            if newTab == .calling {
                 statisticsRefreshToken += 1
                 callingViewModel.requestRefresh()
+            } else if newTab == .statistics {
+                statisticsRefreshToken += 1
             }
         }
         .onChange(of: scenePhase) { newPhase in
@@ -73,8 +77,11 @@ struct AppRootView: View {
             guard newPhase == .active else {
                 return
             }
-            statisticsRefreshToken += 1
-            callingViewModel.requestRefresh()
+            if selectedTab == .calling {
+                callingViewModel.requestRefresh()
+            } else if selectedTab == .statistics {
+                statisticsRefreshToken += 1
+            }
         }
     }
 
@@ -104,7 +111,8 @@ struct AppRootView: View {
             NavigationStack {
                 StatisticsRootView(
                     dependencies: dependencies,
-                    refreshToken: statisticsRefreshToken
+                    refreshToken: statisticsRefreshToken,
+                    isActive: selectedTab == .statistics
                 )
             }
             .tabItem {
@@ -113,7 +121,10 @@ struct AppRootView: View {
             .tag(AppTab.statistics)
 
             NavigationStack {
-                BoardsView(dependencies: dependencies)
+                BoardsView(
+                    dependencies: dependencies,
+                    isActive: selectedTab == .boards
+                )
             }
             .tabItem {
                 Label(AppTab.boards.title, systemImage: AppTab.boards.systemImage)

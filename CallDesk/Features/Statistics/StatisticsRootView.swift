@@ -10,6 +10,7 @@ struct StatisticsRootView: View {
     /// Bumped by the app root when the operator returns to this tab so the
     /// board list picks up boards created or deleted elsewhere.
     private let refreshToken: Int
+    private let isActive: Bool
 
     @State private var state: LoadState = .loading
     @State private var visibleBoards: [CallBoard] = []
@@ -22,9 +23,14 @@ struct StatisticsRootView: View {
         case failed
     }
 
-    init(dependencies: AppDependencies, refreshToken: Int = 0) {
+    init(
+        dependencies: AppDependencies,
+        refreshToken: Int = 0,
+        isActive: Bool = true
+    ) {
         self.dependencies = dependencies
         self.refreshToken = refreshToken
+        self.isActive = isActive
         workspaces = dependencies.workspaces
         boards = dependencies.boards
     }
@@ -53,10 +59,16 @@ struct StatisticsRootView: View {
         }
         .navigationTitle(AppTab.statistics.title)
         .navigationBarTitleDisplayMode(.inline)
-        .task {
+        .task(id: isActive) {
+            guard isActive else {
+                return
+            }
             await load()
         }
         .onChange(of: refreshToken) { _ in
+            guard isActive else {
+                return
+            }
             Task {
                 await load()
             }

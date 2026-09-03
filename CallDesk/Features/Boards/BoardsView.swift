@@ -13,9 +13,11 @@ struct BoardsView: View {
     @State private var listEditMode: EditMode = .inactive
 
     private let dependencies: AppDependencies
+    private let isActive: Bool
 
-    init(dependencies: AppDependencies) {
+    init(dependencies: AppDependencies, isActive: Bool = true) {
         self.dependencies = dependencies
+        self.isActive = isActive
         _viewModel = StateObject(wrappedValue: BoardsViewModel(dependencies: dependencies))
     }
 
@@ -56,7 +58,10 @@ struct BoardsView: View {
             } message: { error in
                 Text(message(for: error))
             }
-            .task {
+            .task(id: isActive) {
+                guard isActive else {
+                    return
+                }
                 await viewModel.refresh()
             }
     }

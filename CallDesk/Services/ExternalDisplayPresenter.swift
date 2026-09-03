@@ -44,7 +44,6 @@ final class ExternalDisplayPresenter: ObservableObject, ExternalDisplayMonitorin
             .sink { [weak self] settings in
                 self?.apply(settings.display)
             }
-        refreshRecentCalls()
     }
 
     var isConnectedPublisher: AnyPublisher<Bool, Never> {
@@ -60,6 +59,9 @@ final class ExternalDisplayPresenter: ObservableObject, ExternalDisplayMonitorin
     /// Called by the external scene delegate when the display goes away.
     func displayDidDisconnect() {
         isConnected = false
+        refreshTask?.cancel()
+        refreshTask = nil
+        presentation = presentation.withRecentCalls([])
     }
 
     // MARK: - Private
@@ -71,7 +73,7 @@ final class ExternalDisplayPresenter: ObservableObject, ExternalDisplayMonitorin
             updatedAt: now()
         )
         // Only a completed call adds a history row worth showing.
-        if liveCall.phase == .completed {
+        if isConnected, liveCall.phase == .completed {
             refreshRecentCalls(preservingPositionFor: liveCall)
         }
     }
@@ -79,7 +81,7 @@ final class ExternalDisplayPresenter: ObservableObject, ExternalDisplayMonitorin
     private func apply(_ settings: DisplaySettings) {
         let recentCallCountDidChange = displaySettings.recentCallCount != settings.recentCallCount
         displaySettings = settings
-        if recentCallCountDidChange {
+        if isConnected, recentCallCountDidChange {
             refreshRecentCalls()
         }
     }
@@ -87,6 +89,9 @@ final class ExternalDisplayPresenter: ObservableObject, ExternalDisplayMonitorin
     private func refreshRecentCalls(
         preservingPositionFor completedCall: LiveCallState? = nil
     ) {
+        guard isConnected else {
+            return
+        }
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             await self?.loadRecentCalls(preservingPositionFor: completedCall)

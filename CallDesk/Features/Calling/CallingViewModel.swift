@@ -459,21 +459,16 @@ final class CallingViewModel: ObservableObject {
             let selectedBoardID = retainedSelectedBoardID(in: visibleBoards) ?? firstBoard.id
             updateLoadingStage(.fetchingActions)
             os_log(.info, log: Self.loadLog, "calling-load: fetching actions")
-            // Core Data's async bridge can still execute synchronous work
-            // before its first suspension on older runtimes. Keep that work
-            // off the calling screen's actor so the watchdog and its visible
-            // diagnostics remain responsive even when a repository stalls.
-            let actionRepository = actions
-            let diagnostics = startupDiagnostics
-            recordStartupDiagnostic("CALL-05A 已提交叫号项后台任务")
-            let boardActions = try await Task.detached(priority: .userInitiated) {
-                diagnostics.append("CALL-05B 叫号项后台任务已开始")
-                return try await actionRepository.fetch(
-                    boardID: selectedBoardID,
-                    includeDisabled: true
-                )
-            }.value
-            recordStartupDiagnostic("CALL-05C 叫号项后台任务已返回")
+            // This work must remain in the already-running loading task.
+            // On iOS 16.7, a separately submitted detached task can remain
+            // queued indefinitely after this point. The repository already
+            // performs its Core Data work on its own context.
+            recordStartupDiagnostic("CALL-05A 直接读取叫号项")
+            let boardActions = try await actions.fetch(
+                boardID: selectedBoardID,
+                includeDisabled: true
+            )
+            recordStartupDiagnostic("CALL-05B 叫号项读取已返回")
             os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld actions", boardActions.count)
             guard !Task.isCancelled else {
                 recordStartupDiagnostic("CANCELLED CALL-05 叫号项读取已取消")

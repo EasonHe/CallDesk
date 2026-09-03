@@ -25,6 +25,7 @@ struct ExternalDisplayPresenterTests {
     func completedCallRefreshesRecentCalls() async throws {
         let fixture = try Fixture()
         try await fixture.saveCompletedRecord(title: "A007")
+        fixture.presenter.displayDidConnect()
 
         let completed = try LiveCallState(
             title: "A007",
@@ -44,6 +45,7 @@ struct ExternalDisplayPresenterTests {
     func speakingUpdateKeepsRecentCalls() async throws {
         let fixture = try Fixture()
         try await fixture.saveCompletedRecord(title: "A001")
+        fixture.presenter.displayDidConnect()
         fixture.service.send(
             try LiveCallState(title: "A001", spokenText: "Text", phase: .completed)
         )
@@ -146,6 +148,7 @@ struct ExternalDisplayPresenterTests {
             title: "A002",
             startedAt: Fixture.referenceDate.addingTimeInterval(-30)
         )
+        fixture.presenter.displayDidConnect()
 
         fixture.service.send(
             try LiveCallState(title: "A002", spokenText: "Text", phase: .completed)

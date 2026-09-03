@@ -4,6 +4,30 @@ import Testing
 
 @Suite("Core Data persistence stack")
 struct CoreDataPersistenceTests {
+    @Test("Core Data reads wait for persistent-store readiness")
+    func readsWaitForPersistentStoreReadiness() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        await persistence.waitUntilReady()
+
+        let readinessGate = PersistentStoreReadinessGate()
+        let store = CoreDataCallDeskStore(
+            context: persistence.newBackgroundContext(),
+            waitForPersistentStore: { await readinessGate.wait() }
+        )
+        let fetch = Task { try await store.fetchWorkspaces() }
+
+        for _ in 0..<100 {
+            if await readinessGate.waitCallCount == 1 {
+                break
+            }
+            await Task.yield()
+        }
+        #expect(await readinessGate.waitCallCount == 1)
+
+        await readinessGate.open()
+        #expect(try await fetch.value == [])
+    }
+
     @Test("Data saved through one repository set survives recreating the repositories")
     func dataSurvivesRepositoryRecreation() async throws {
         let persistence = PersistenceController(inMemory: true)
@@ -134,5 +158,30 @@ struct CoreDataPersistenceTests {
         let coreDataTemplates = try await context.repositories.templates.fetchAll(includeBuiltIn: true)
         let inMemoryTemplates = try await inMemory.templates.fetchAll(includeBuiltIn: true)
         #expect(coreDataTemplates == inMemoryTemplates)
+    }
+}
+
+private actor PersistentStoreReadinessGate {
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    private(set) var waitCallCount = 0
+    private var isOpen = false
+
+    func wait() async {
+        waitCallCount += 1
+        guard !isOpen else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func open() {
+        isOpen = true
+        let pendingContinuations = continuations
+        continuations.removeAll()
+        for continuation in pendingContinuations {
+            continuation.resume()
+        }
     }
 }

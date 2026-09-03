@@ -9,9 +9,19 @@ import Foundation
 /// never leave the perform blocks.
 nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     private let context: NSManagedObjectContext
+    private let waitForPersistentStore: @Sendable () async -> Void
 
     init(persistence: PersistenceController) {
         context = persistence.newBackgroundContext()
+        waitForPersistentStore = { await persistence.waitUntilReady() }
+    }
+
+    init(
+        context: NSManagedObjectContext,
+        waitForPersistentStore: @escaping @Sendable () async -> Void
+    ) {
+        self.context = context
+        self.waitForPersistentStore = waitForPersistentStore
     }
 
     // MARK: - Workspaces
@@ -338,6 +348,7 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     /// parent automatically, so the seeded data appears on screen right
     /// after this call finishes.
     func seedInitialDataIfNeeded(catalog: CallDeskSampleData.Catalog) async throws -> Bool {
+        await waitForPersistentStore()
         let seeded: Bool
         do {
             seeded = try await context.perform {
@@ -390,7 +401,8 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     private func performRead<Value: Sendable>(
         _ work: @escaping @Sendable () throws -> Value
     ) async throws -> Value {
-        try await context.perform {
+        await waitForPersistentStore()
+        return try await context.perform {
             do {
                 return try work()
             } catch {
@@ -402,7 +414,8 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     private func performWrite<Value: Sendable>(
         _ work: @escaping @Sendable () throws -> Value
     ) async throws -> Value {
-        try await context.perform {
+        await waitForPersistentStore()
+        return try await context.perform {
             do {
                 let value = try work()
                 if self.context.hasChanges {

@@ -126,7 +126,7 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
 
     func fetchActions(boardID: UUID, includeDisabled: Bool) async throws -> [CallAction] {
         diagnostics.append("ACTION-02 已进入叫号项存储方法")
-        try await performRead {
+        return try await performRead {
             let actions = try self.entities(CDCallAction.self, format: "boardID == %@", boardID)
                 .map { try $0.domainValue() }
                 .filter { includeDisabled || $0.isEnabled }

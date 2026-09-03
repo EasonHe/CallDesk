@@ -468,7 +468,7 @@ final class CallingViewModel: ObservableObject {
             recordStartupDiagnostic("CALL-05A 已提交叫号项后台任务")
             let boardActions = try await Task.detached(priority: .userInitiated) {
                 diagnostics.append("CALL-05B 叫号项后台任务已开始")
-                try await actionRepository.fetch(
+                return try await actionRepository.fetch(
                     boardID: selectedBoardID,
                     includeDisabled: true
                 )

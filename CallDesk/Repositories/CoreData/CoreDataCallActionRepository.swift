@@ -9,7 +9,7 @@ nonisolated struct CoreDataCallActionRepository: CallActionRepository {
 
     func fetch(boardID: UUID, includeDisabled: Bool) async throws -> [CallAction] {
         store.recordDiagnostic("ACTION-01 已进入叫号项仓库")
-        try await store.fetchActions(boardID: boardID, includeDisabled: includeDisabled)
+        return try await store.fetchActions(boardID: boardID, includeDisabled: includeDisabled)
     }
 
     func action(id: UUID) async throws -> CallAction? {

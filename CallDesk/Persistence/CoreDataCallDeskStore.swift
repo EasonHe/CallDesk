@@ -361,7 +361,7 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
         diagnostics.append("STORE-21 初始数据写入开始")
         let seeded: Bool
         do {
-            seeded = try await performOnContext {
+            seeded = try await context.perform {
                 let workspaceRequest = NSFetchRequest<CDWorkspace>(entityName: "CDWorkspace")
                 let templateRequest = NSFetchRequest<CDVoiceTemplate>(entityName: "CDVoiceTemplate")
                 guard try self.context.count(for: workspaceRequest) == 0,
@@ -415,7 +415,13 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
         do {
             await waitForPersistentStore()
             diagnostics.append("STORE-11 查询进入 Core Data context")
-            let value = try await performOnContext(work)
+            let value = try await context.perform {
+                do {
+                    return try work()
+                } catch {
+                    throw RepositoryError(wrapping: error)
+                }
+            }
             diagnostics.append("STORE-13 查询已从 Core Data context 返回")
             return value
         } catch {
@@ -435,7 +441,7 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
         do {
             await waitForPersistentStore()
             diagnostics.append("STORE-31 写入进入 Core Data context")
-            return try await performOnContext {
+            return try await context.perform {
                 do {
                     let value = try work()
                     if self.context.hasChanges {
@@ -444,30 +450,12 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
                     return value
                 } catch {
                     self.context.rollback()
-                    throw error
+                    throw RepositoryError(wrapping: error)
                 }
             }
         } catch {
             diagnostics.append("STORE-32 写入失败：\(error)")
             throw error
-        }
-    }
-
-    /// Uses Core Data's long-standing callback-based queue API rather than
-    /// the async generic `perform` overload. The latter can leave a submitted
-    /// closure unscheduled on some iOS 16 devices after earlier context work.
-    /// Domain values are still the only values that cross the context boundary.
-    private func performOnContext<Value: Sendable>(
-        _ work: @escaping @Sendable () throws -> Value
-    ) async throws -> Value {
-        try await withCheckedThrowingContinuation { continuation in
-            context.perform { [self] in
-                do {
-                    continuation.resume(returning: try work())
-                } catch {
-                    continuation.resume(throwing: RepositoryError(wrapping: error))
-                }
-            }
         }
     }
 

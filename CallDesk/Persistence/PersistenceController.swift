@@ -1,4 +1,5 @@
 import CoreData
+import Dispatch
 import Foundation
 
 /// A bounded, privacy-safe launch trace shared by persistence and the first
@@ -8,20 +9,52 @@ nonisolated final class StartupDiagnostics: @unchecked Sendable {
     private let lock = NSLock()
     private var lines: [String] = []
 
+    /// A separate serial queue owns persistence and watchdog callbacks. It
+    /// deliberately never uses the main actor: when the UI is frozen, the
+    /// next launch can still show the last captured boundary.
+    private static let persistenceQueue = DispatchQueue(label: "io.wayneho.CallDesk.startup-diagnostics")
+    private static let watchdogQueue = DispatchQueue(label: "io.wayneho.CallDesk.startup-watchdog", qos: .utility)
+    private static let storageKey = "startupDiagnostics.lastSession"
+    private static let retainedPreviousLineCount = 40
+
+    init() {
+        let previousLines = UserDefaults.standard.stringArray(forKey: Self.storageKey) ?? []
+        lines = Array(previousLines.suffix(Self.retainedPreviousLineCount))
+    }
+
     func append(_ message: String) {
         let timestamp = Date.now.formatted(date: .omitted, time: .standard)
+        let linesToPersist: [String]
         lock.lock()
         lines.append("\(timestamp)  \(message)")
         if lines.count > Self.maximumLines {
             lines.removeFirst(lines.count - Self.maximumLines)
         }
+        linesToPersist = lines
         lock.unlock()
+
+        Self.persistenceQueue.async {
+            UserDefaults.standard.set(linesToPersist, forKey: Self.storageKey)
+        }
     }
 
     func snapshot() -> [String] {
         lock.lock()
         defer { lock.unlock() }
         return lines
+    }
+
+    /// Records liveness from an independent dispatch queue. These lines are
+    /// saved even if a synchronous task prevents the main actor from updating
+    /// the visible loading screen.
+    func startWatchdog(buildLabel: String) {
+        append("BUILD \(buildLabel) 后台诊断已启动")
+        Self.watchdogQueue.asyncAfter(deadline: .now() + .seconds(3)) { [weak self] in
+            self?.append("WATCH-01 后台看门狗仍在运行（3 秒）")
+        }
+        Self.watchdogQueue.asyncAfter(deadline: .now() + .seconds(15)) { [weak self] in
+            self?.append("WATCH-02 后台看门狗仍在运行（15 秒）")
+        }
     }
 
     private static let maximumLines = 80

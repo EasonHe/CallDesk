@@ -464,12 +464,16 @@ final class CallingViewModel: ObservableObject {
             // off the calling screen's actor so the watchdog and its visible
             // diagnostics remain responsive even when a repository stalls.
             let actionRepository = actions
+            let diagnostics = startupDiagnostics
+            recordStartupDiagnostic("CALL-05A 已提交叫号项后台任务")
             let boardActions = try await Task.detached(priority: .userInitiated) {
+                diagnostics.append("CALL-05B 叫号项后台任务已开始")
                 try await actionRepository.fetch(
                     boardID: selectedBoardID,
                     includeDisabled: true
                 )
             }.value
+            recordStartupDiagnostic("CALL-05C 叫号项后台任务已返回")
             os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld actions", boardActions.count)
             guard !Task.isCancelled else {
                 recordStartupDiagnostic("CANCELLED CALL-05 叫号项读取已取消")

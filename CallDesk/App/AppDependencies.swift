@@ -106,12 +106,9 @@ struct AppDependencies {
         seedCatalog: CallDeskSampleData.Catalog? = nil
     ) -> AppDependencies {
         let repositories = CoreDataRepositories(persistence: persistence)
-        // Repair the obsolete bundled clip names from the first showcase
-        // catalog. This is scoped to fixed demo IDs and is a no-op for all
-        // current catalogs and user-created content.
-        Task(priority: .utility) {
-            _ = try? await repositories.store.migrateLegacyDemoAudioClipReferences()
-        }
+        // The legacy demo-audio migration is deliberately not run at launch.
+        // It is unrelated to user-created data and used to contend with the
+        // calling screen for the shared Core Data context on older devices.
         let catalogToSeed = seedCatalog ?? (seedSampleData ? CallDeskSampleData.catalog : nil)
         // Seed work runs off the launch path so a year of demo records can
         // never stall the first screen; the root view waits for the task

@@ -125,6 +125,7 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     // MARK: - Actions
 
     func fetchActions(boardID: UUID, includeDisabled: Bool) async throws -> [CallAction] {
+        diagnostics.append("ACTION-02 已进入叫号项存储方法")
         try await performRead {
             let actions = try self.entities(CDCallAction.self, format: "boardID == %@", boardID)
                 .map { try $0.domainValue() }
@@ -410,17 +411,23 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
         do {
             await waitForPersistentStore()
             diagnostics.append("STORE-11 查询进入 Core Data context")
-            return try await context.perform {
+            let value = try await context.perform {
                 do {
                     return try work()
                 } catch {
                     throw RepositoryError(wrapping: error)
                 }
             }
+            diagnostics.append("STORE-13 查询已从 Core Data context 返回")
+            return value
         } catch {
             diagnostics.append("STORE-12 查询失败：\(error)")
             throw error
         }
+    }
+
+    func recordDiagnostic(_ message: String) {
+        diagnostics.append(message)
     }
 
     private func performWrite<Value: Sendable>(

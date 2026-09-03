@@ -45,12 +45,12 @@ struct CallDeskApp: App {
         // UIKit instantiates the external scene delegate on its own, so the
         // presenter is handed over through this single static hook.
         ExternalDisplaySceneDelegate.presenter = dependencies.externalDisplay
-        // Launch housekeeping runs off the critical path so the first
-        // screen appears immediately.
-        let dependencies = self.dependencies
-        Task {
-            await dependencies.performStartupMaintenance()
-        }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        dependencies.startupDiagnostics.startWatchdog(buildLabel: "\(version) (\(build))")
+        // History-retention maintenance is not run at launch. It is best
+        // effort work and must not compete with the primary calling screen
+        // for Core Data resources on an older device.
         // The Matcha model is loaded lazily when an operator first makes a
         // speech call. Loading its 126 MB model at launch competes with the
         // primary calling screen on older iPhones, including iPhone 8 Plus

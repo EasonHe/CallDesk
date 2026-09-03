@@ -65,35 +65,76 @@ struct CallingView: View {
         case .loaded(let loadedContent):
             loadedView(loadedContent)
         case .failed:
-            FeatureErrorStateView {
-                viewModel.retryLoading()
-            }
+            failedLoadingView
         }
     }
 
     private var loadingView: some View {
-        VStack(spacing: 14) {
-            ProgressView()
+        ScrollView {
+            VStack(spacing: 14) {
+                ProgressView()
 
-            if let stage = viewModel.loadingDiagnosticStage {
-                VStack(spacing: 6) {
-                    Text("叫号加载未完成")
+                if let stage = viewModel.loadingDiagnosticStage {
+                    Text("等待中：\(stage.diagnosticCode)")
                         .font(.headline)
-                    Text("诊断码：\(stage.diagnosticCode)")
-                        .font(.subheadline.monospaced())
-                    Text(stage.diagnosticMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Button("重新加载") {
-                        viewModel.retryLoading()
-                    }
-                    .buttonStyle(.bordered)
                 }
-                .multilineTextAlignment(.center)
-                .accessibilityElement(children: .combine)
+
+                startupDiagnosticLog
+
+                Button("重新加载") {
+                    viewModel.retryLoading()
+                }
+                .buttonStyle(.bordered)
             }
+            .padding()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var failedLoadingView: some View {
+        ScrollView {
+            VStack(spacing: CallDeskTheme.pageSpacing) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("叫号加载失败")
+                    .font(.title2.bold())
+                Text("请复制下方诊断日志并发送给技术支持。")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                startupDiagnosticLog
+                Button("重新加载") {
+                    viewModel.retryLoading()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+        }
+    }
+
+    private var startupDiagnosticLog: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("启动日志")
+                    .font(.headline)
+                Spacer()
+                Button("复制") {
+                    UIPasteboard.general.string = viewModel.startupDiagnosticText
+                }
+                .buttonStyle(.bordered)
+            }
+            Text(viewModel.startupDiagnosticText)
+                .font(.caption.monospaced())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: CallDeskTheme.cardCornerRadius)
+                .fill(Color.secondary.opacity(0.1))
+        )
+        .accessibilityElement(children: .contain)
     }
 
     private func loadedView(_ content: CallingViewModel.Content) -> some View {

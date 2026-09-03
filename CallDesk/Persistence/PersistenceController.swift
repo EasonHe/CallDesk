@@ -1,6 +1,32 @@
 import CoreData
 import Foundation
 
+/// A bounded, privacy-safe launch trace shared by persistence and the first
+/// calling screen. It records technical boundaries only; no call text or
+/// user-created content enters the trace.
+nonisolated final class StartupDiagnostics: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func append(_ message: String) {
+        let timestamp = Date.now.formatted(date: .omitted, time: .standard)
+        lock.lock()
+        lines.append("\(timestamp)  \(message)")
+        if lines.count > Self.maximumLines {
+            lines.removeFirst(lines.count - Self.maximumLines)
+        }
+        lock.unlock()
+    }
+
+    func snapshot() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines
+    }
+
+    private static let maximumLines = 80
+}
+
 /// Owns the Core Data stack behind the CallDesk repositories.
 ///
 /// The managed object model is loaded once and shared by every controller so
@@ -20,6 +46,7 @@ nonisolated final class PersistenceController: @unchecked Sendable {
     }()
 
     let container: NSPersistentContainer
+    let diagnostics: StartupDiagnostics
 
     /// Represents the one persistent-store load started for this controller.
     /// `loadPersistentStores` is asynchronous, so repository work must await
@@ -32,7 +59,7 @@ nonisolated final class PersistenceController: @unchecked Sendable {
 
     /// - Parameter inMemory: When true the store is backed by `/dev/null`,
     ///   keeping previews and tests fully isolated from user data on disk.
-    init(inMemory: Bool = false) {
+    init(inMemory: Bool = false, diagnostics: StartupDiagnostics = StartupDiagnostics()) {
         let container = NSPersistentContainer(name: Self.modelName, managedObjectModel: Self.sharedModel)
         if inMemory {
             let description = NSPersistentStoreDescription(url: URL(fileURLWithPath: "/dev/null"))
@@ -40,7 +67,9 @@ nonisolated final class PersistenceController: @unchecked Sendable {
         }
 
         self.container = container
-        storeLoadTask = Self.makeStoreLoadTask(for: container, inMemory: inMemory)
+        self.diagnostics = diagnostics
+        diagnostics.append("STORE-01 开始加载本地数据库")
+        storeLoadTask = Self.makeStoreLoadTask(for: container, inMemory: inMemory, diagnostics: diagnostics)
         container.viewContext.automaticallyMergesChangesFromParent = true
     }
 
@@ -66,22 +95,30 @@ nonisolated final class PersistenceController: @unchecked Sendable {
     /// baseline in both cases.
     private static func makeStoreLoadTask(
         for container: NSPersistentContainer,
-        inMemory: Bool
+        inMemory: Bool,
+        diagnostics: StartupDiagnostics
     ) -> Task<Bool, Never> {
         Task { @MainActor in
+            diagnostics.append("STORE-02 等待 Core Data 存储加载回调")
             do {
                 try await loadStores(of: container)
+                diagnostics.append("STORE-03 本地数据库已就绪")
                 return false
             } catch {
+                diagnostics.append("STORE-04 本地数据库加载失败：\(error)")
                 guard !inMemory else {
                     preconditionFailure("Unable to load the in-memory CallDesk store: \(error)")
                 }
-                return await recoverFromFailedLoad(of: container)
+                return await recoverFromFailedLoad(of: container, diagnostics: diagnostics)
             }
         }
     }
 
-    private static func recoverFromFailedLoad(of container: NSPersistentContainer) async -> Bool {
+    private static func recoverFromFailedLoad(
+        of container: NSPersistentContainer,
+        diagnostics: StartupDiagnostics
+    ) async -> Bool {
+        diagnostics.append("STORE-05 尝试重建本地数据库")
         if let storeURL = container.persistentStoreDescriptions.first?.url {
             try? container.persistentStoreCoordinator.destroyPersistentStore(
                 at: storeURL,
@@ -89,8 +126,10 @@ nonisolated final class PersistenceController: @unchecked Sendable {
             )
             do {
                 try await loadStores(of: container)
+                diagnostics.append("STORE-06 本地数据库重建完成")
                 return false
             } catch {
+                diagnostics.append("STORE-07 本地数据库重建失败：\(error)")
                 // Continue into the in-memory fallback below.
             }
         }
@@ -98,7 +137,9 @@ nonisolated final class PersistenceController: @unchecked Sendable {
         container.persistentStoreDescriptions = [description]
         do {
             try await loadStores(of: container)
+            diagnostics.append("STORE-08 已切换到临时内存数据库")
         } catch {
+            diagnostics.append("STORE-09 临时内存数据库加载失败：\(error)")
             preconditionFailure("Unable to load the fallback CallDesk store: \(error)")
         }
         return true

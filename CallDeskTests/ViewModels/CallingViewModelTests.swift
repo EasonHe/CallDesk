@@ -83,6 +83,30 @@ struct CallingViewModelTests {
         #expect(await waitForDiagnosticStage(.fetchingWorkspaces, of: viewModel))
     }
 
+    @Test("A stalled startup ends with a visible workspace trace instead of spinning forever")
+    func stalledStartupShowsTraceAndFails() async throws {
+        let fixture = try Fixture()
+        let repositories = fixture.repositories
+        let callService = DefaultCallService(
+            actions: repositories.actions,
+            history: repositories.history,
+            speechDriver: SilentCallSpeechDriver(utteranceDuration: 0)
+        )
+        let viewModel = CallingViewModel(
+            workspaces: DelayedWorkspaceRepository(),
+            boards: repositories.boards,
+            actions: repositories.actions,
+            callService: callService,
+            history: repositories.history,
+            loadingDiagnosticDelay: .milliseconds(1),
+            loadingTimeout: .milliseconds(30)
+        )
+
+        #expect(await waitForFailedState(of: viewModel))
+        #expect(viewModel.startupDiagnosticText.contains("CALL-03 正在读取本地数据"))
+        #expect(viewModel.startupDiagnosticText.contains("TIMEOUT"))
+    }
+
     @Test("Loading a board without actions stays loaded with no actions")
     func loadBoardWithoutActionsKeepsLoadedState() async throws {
         let store = try InMemoryCallDeskStore(
@@ -945,6 +969,18 @@ struct CallingViewModelTests {
         let deadline = clock.now.advanced(by: .seconds(1))
         while clock.now < deadline {
             if viewModel.loadingDiagnosticStage == stage {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func waitForFailedState(of viewModel: CallingViewModel) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while clock.now < deadline {
+            if viewModel.state == .failed {
                 return true
             }
             try? await Task.sleep(for: .milliseconds(10))

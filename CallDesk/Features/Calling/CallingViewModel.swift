@@ -65,6 +65,14 @@ final class CallingViewModel: ObservableObject {
     @Published private(set) var liveCall: LiveCallState = .idle
     /// Shown only when loading has exceeded the diagnostic delay.
     @Published private(set) var loadingDiagnosticStage: LoadingStage?
+    /// A privacy-safe startup trace rendered directly in the calling panel.
+    /// It contains only load boundaries, counts, and storage errors; it never
+    /// records call text, names, or other operator data.
+    @Published private(set) var startupDiagnosticLines: [String] = []
+
+    var startupDiagnosticText: String {
+        startupDiagnosticLines.joined(separator: "\n")
+    }
 
     /// Action IDs that have completed a call. The calling view uses this to
     /// tint called tiles so the operator can see at a glance which numbers
@@ -129,9 +137,12 @@ final class CallingViewModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var refreshTaskID: UUID?
     private var loadingDiagnosticTask: Task<Void, Never>?
+    private var loadingTimeoutTask: Task<Void, Never>?
     private var currentLoadingStage: LoadingStage?
     private let loadingDiagnosticDelay: Duration
+    private let loadingTimeout: Duration
     private let diagnosticsDefaults: UserDefaults
+    private let startupDiagnostics: StartupDiagnostics
     private var hasLoaded = false
     /// The action ID that was active most recently; used to detect the
     /// moment a call transitions from "in-flight" to "completed" so the
@@ -154,7 +165,9 @@ final class CallingViewModel: ObservableObject {
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init,
         loadingDiagnosticDelay: Duration = .seconds(3),
-        diagnosticsDefaults: UserDefaults = .standard
+        loadingTimeout: Duration = .seconds(15),
+        diagnosticsDefaults: UserDefaults = .standard,
+        startupDiagnostics: StartupDiagnostics = StartupDiagnostics()
     ) {
         self.workspaces = workspaces
         self.boards = boards
@@ -165,7 +178,9 @@ final class CallingViewModel: ObservableObject {
         self.calendar = calendar
         self.now = now
         self.loadingDiagnosticDelay = loadingDiagnosticDelay
+        self.loadingTimeout = loadingTimeout
         self.diagnosticsDefaults = diagnosticsDefaults
+        self.startupDiagnostics = startupDiagnostics
         liveCall = callService.liveCallState
         lastActiveActionID = liveCall.actionID
         liveCallSubscription = callService.liveCallStatePublisher
@@ -180,6 +195,7 @@ final class CallingViewModel: ObservableObject {
         let loadedSettings = settingsStore.load()
         hapticFeedbackEnabled = loadedSettings.voice.hapticFeedback
         showsActionDetail = loadedSettings.display.showsActionDetail
+        recordStartupDiagnostic("CALL-00 叫号加载器已创建")
 
         // A fresh installation must make progress even when SwiftUI has not
         // delivered a child tab lifecycle callback yet (notably on iOS 16).
@@ -195,7 +211,8 @@ final class CallingViewModel: ObservableObject {
             callService: dependencies.callService,
             history: dependencies.history,
             calledMarkers: dependencies.calledMarkers,
-            settingsStore: dependencies.settingsStore
+            settingsStore: dependencies.settingsStore,
+            startupDiagnostics: dependencies.startupDiagnostics
         )
     }
 
@@ -251,12 +268,14 @@ final class CallingViewModel: ObservableObject {
     /// TabView implementations.
     func requestRefresh() {
         guard refreshTask == nil else {
+            recordStartupDiagnostic("CALL-01 已有加载任务，忽略重复请求")
             return
         }
         let taskID = UUID()
         refreshTaskID = taskID
         beginLoadingDiagnostics()
         updateLoadingStage(.refreshRequested)
+        recordStartupDiagnostic("CALL-01 已创建加载任务")
         refreshTask = Task { [weak self] in
             guard let self else {
                 return
@@ -264,13 +283,16 @@ final class CallingViewModel: ObservableObject {
             await self.refresh()
             self.finishRefreshTask(id: taskID)
         }
+        scheduleLoadingTimeout(for: taskID)
     }
 
     /// Starts a fresh lifecycle request after a diagnostic timeout. A stale
     /// request is cancelled first; its eventual result is harmless because
     /// both requests read the same local snapshot.
     func retryLoading() {
+        recordStartupDiagnostic("CALL-01 操作员请求重新加载")
         refreshTask?.cancel()
+        loadingTimeoutTask?.cancel()
         refreshTask = nil
         refreshTaskID = nil
         requestRefresh()
@@ -287,6 +309,7 @@ final class CallingViewModel: ObservableObject {
         // here automatically.
         calledActionIDs = calledMarkers.load()
         os_log(.info, log: Self.loadLog, "calling-load: restored called markers")
+        recordStartupDiagnostic("CALL-02 本日状态恢复完成")
         if restoringUndoTargetBeforeContent {
             await restoreLastCompletedCall()
         }
@@ -406,6 +429,11 @@ final class CallingViewModel: ObservableObject {
             os_log(.info, log: Self.loadLog, "calling-load: fetching workspaces")
             let workspaces = try await workspaces.fetchAll()
             os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld workspaces", workspaces.count)
+            guard !Task.isCancelled else {
+                recordStartupDiagnostic("CANCELLED CALL-03 工作区读取已取消")
+                return
+            }
+            recordStartupDiagnostic("CALL-03 工作区读取完成：\(workspaces.count) 个")
             guard let workspace = workspaces.first else {
                 os_log(.info, log: Self.loadLog, "calling-load: no workspace")
                 state = .empty
@@ -418,6 +446,11 @@ final class CallingViewModel: ObservableObject {
                 includeArchived: false
             )
             os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld boards", visibleBoards.count)
+            guard !Task.isCancelled else {
+                recordStartupDiagnostic("CANCELLED CALL-04 面板读取已取消")
+                return
+            }
+            recordStartupDiagnostic("CALL-04 面板读取完成：\(visibleBoards.count) 个")
             guard let firstBoard = visibleBoards.first else {
                 os_log(.info, log: Self.loadLog, "calling-load: no board")
                 state = .empty
@@ -431,6 +464,11 @@ final class CallingViewModel: ObservableObject {
                 includeDisabled: true
             )
             os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld actions", boardActions.count)
+            guard !Task.isCancelled else {
+                recordStartupDiagnostic("CANCELLED CALL-05 叫号项读取已取消")
+                return
+            }
+            recordStartupDiagnostic("CALL-05 叫号项读取完成：\(boardActions.count) 个")
             state = .loaded(
                 Content(
                     workspaceName: workspace.name,
@@ -440,8 +478,15 @@ final class CallingViewModel: ObservableObject {
                 )
             )
             updateLoadingStage(.completed)
+        } catch is CancellationError {
+            recordStartupDiagnostic("CANCELLED 叫号加载已取消")
         } catch {
             os_log(.error, log: Self.loadLog, "calling-load: failed: %{public}@", "\(error)")
+            guard !Task.isCancelled else {
+                recordStartupDiagnostic("CANCELLED 叫号加载已取消")
+                return
+            }
+            recordStartupDiagnostic("ERROR \(currentLoadingStage?.diagnosticCode ?? "CALL-00") \(String(describing: error))")
             state = .failed
             updateLoadingStage(.failed)
         }
@@ -460,7 +505,39 @@ final class CallingViewModel: ObservableObject {
                 return
             }
             self.loadingDiagnosticStage = self.currentLoadingStage
+            self.recordStartupDiagnostic(
+                "WAIT \(self.currentLoadingStage?.diagnosticCode ?? "CALL-00") 已等待 \(self.loadingDiagnosticDelay.components.seconds) 秒"
+            )
         }
+    }
+
+    private func scheduleLoadingTimeout(for taskID: UUID) {
+        loadingTimeoutTask?.cancel()
+        loadingTimeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: self?.loadingTimeout ?? .seconds(15))
+            } catch {
+                return
+            }
+            self?.failTimedOutLoad(id: taskID)
+        }
+    }
+
+    private func failTimedOutLoad(id: UUID) {
+        guard refreshTaskID == id, refreshTask != nil else {
+            return
+        }
+        let stageCode = currentLoadingStage?.diagnosticCode ?? "CALL-00"
+        recordStartupDiagnostic("TIMEOUT \(stageCode) 本地加载超过 \(loadingTimeout.components.seconds) 秒")
+        os_log(.error, log: Self.loadLog, "calling-load: timed out at %{public}@", stageCode)
+        state = .failed
+        updateLoadingStage(.failed)
+        refreshTask?.cancel()
+        refreshTask = nil
+        refreshTaskID = nil
+        loadingDiagnosticTask?.cancel()
+        loadingDiagnosticTask = nil
+        loadingTimeoutTask = nil
     }
 
     private func finishRefreshTask(id: UUID) {
@@ -471,15 +548,24 @@ final class CallingViewModel: ObservableObject {
         refreshTaskID = nil
         loadingDiagnosticTask?.cancel()
         loadingDiagnosticTask = nil
+        loadingTimeoutTask?.cancel()
+        loadingTimeoutTask = nil
         loadingDiagnosticStage = nil
     }
 
     private func updateLoadingStage(_ stage: LoadingStage) {
         currentLoadingStage = stage
         diagnosticsDefaults.set(stage.diagnosticCode, forKey: Self.loadingDiagnosticDefaultsKey)
+        recordStartupDiagnostic("\(stage.diagnosticCode) \(stage.diagnosticMessage)")
         if loadingDiagnosticStage != nil {
             loadingDiagnosticStage = stage
         }
+    }
+
+    private func recordStartupDiagnostic(_ message: String) {
+        startupDiagnostics.append(message)
+        startupDiagnosticLines = startupDiagnostics.snapshot()
+        os_log(.info, log: Self.loadLog, "calling-trace: %{public}@", message)
     }
 
     private nonisolated static let loadingDiagnosticDefaultsKey = "callingLoadDiagnosticStage"

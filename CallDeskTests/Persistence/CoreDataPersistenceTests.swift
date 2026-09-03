@@ -4,6 +4,18 @@ import Testing
 
 @Suite("Core Data persistence stack")
 struct CoreDataPersistenceTests {
+    @Test("Persistent store startup records its load boundaries")
+    func persistentStoreStartupRecordsLoadBoundaries() async throws {
+        let diagnostics = StartupDiagnostics()
+        let persistence = PersistenceController(inMemory: true, diagnostics: diagnostics)
+
+        await persistence.waitUntilReady()
+
+        let trace = diagnostics.snapshot().joined(separator: "\n")
+        #expect(trace.contains("STORE-01 开始加载本地数据库"))
+        #expect(trace.contains("STORE-03 本地数据库已就绪"))
+    }
+
     @Test("Core Data reads wait for persistent-store readiness")
     func readsWaitForPersistentStoreReadiness() async throws {
         let persistence = PersistenceController(inMemory: true)

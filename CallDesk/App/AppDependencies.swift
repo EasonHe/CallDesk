@@ -14,6 +14,7 @@ struct AppDependencies {
     let audioPacks: any AudioPackStoring
     let callService: any CallService
     let calledMarkers: any CalledMarkersStoring
+    let startupDiagnostics: StartupDiagnostics
     let externalDisplay: ExternalDisplayPresenter
     /// One-time background work that fills an empty store with demo data;
     /// UI must wait for it before showing screens that read the data.
@@ -32,6 +33,7 @@ struct AppDependencies {
         audioPacks: (any AudioPackStoring)? = nil,
         callService: (any CallService)? = nil,
         calledMarkers: (any CalledMarkersStoring)? = nil,
+        startupDiagnostics: StartupDiagnostics = StartupDiagnostics(),
         initialDataSeed: Task<Void, Never>? = nil
     ) {
         self.workspaces = workspaces
@@ -61,6 +63,7 @@ struct AppDependencies {
         )
         self.callService = resolvedCallService
         self.calledMarkers = calledMarkers ?? InMemoryCalledMarkersStore()
+        self.startupDiagnostics = startupDiagnostics
         self.externalDisplay = ExternalDisplayPresenter(
             callService: resolvedCallService,
             history: history,
@@ -160,6 +163,7 @@ struct AppDependencies {
             audioPacks: audioPacks,
             callService: callService,
             calledMarkers: UserDefaultsCalledMarkersStore(),
+            startupDiagnostics: persistence.diagnostics,
             initialDataSeed: initialDataSeed
         )
     }

@@ -10,10 +10,12 @@ import Foundation
 nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     private let context: NSManagedObjectContext
     private let waitForPersistentStore: @Sendable () async -> Void
+    private let diagnostics: StartupDiagnostics
 
     init(persistence: PersistenceController) {
         context = persistence.newBackgroundContext()
         waitForPersistentStore = { await persistence.waitUntilReady() }
+        diagnostics = persistence.diagnostics
     }
 
     init(
@@ -22,6 +24,7 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     ) {
         self.context = context
         self.waitForPersistentStore = waitForPersistentStore
+        diagnostics = StartupDiagnostics()
     }
 
     // MARK: - Workspaces
@@ -348,7 +351,9 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     /// parent automatically, so the seeded data appears on screen right
     /// after this call finishes.
     func seedInitialDataIfNeeded(catalog: CallDeskSampleData.Catalog) async throws -> Bool {
+        diagnostics.append("STORE-20 初始数据写入等待数据库")
         await waitForPersistentStore()
+        diagnostics.append("STORE-21 初始数据写入开始")
         let seeded: Bool
         do {
             seeded = try await context.perform {
@@ -401,31 +406,45 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     private func performRead<Value: Sendable>(
         _ work: @escaping @Sendable () throws -> Value
     ) async throws -> Value {
-        await waitForPersistentStore()
-        return try await context.perform {
-            do {
-                return try work()
-            } catch {
-                throw RepositoryError(wrapping: error)
+        diagnostics.append("STORE-10 查询等待数据库就绪")
+        do {
+            await waitForPersistentStore()
+            diagnostics.append("STORE-11 查询进入 Core Data context")
+            return try await context.perform {
+                do {
+                    return try work()
+                } catch {
+                    throw RepositoryError(wrapping: error)
+                }
             }
+        } catch {
+            diagnostics.append("STORE-12 查询失败：\(error)")
+            throw error
         }
     }
 
     private func performWrite<Value: Sendable>(
         _ work: @escaping @Sendable () throws -> Value
     ) async throws -> Value {
-        await waitForPersistentStore()
-        return try await context.perform {
-            do {
-                let value = try work()
-                if self.context.hasChanges {
-                    try self.context.save()
+        diagnostics.append("STORE-30 写入等待数据库就绪")
+        do {
+            await waitForPersistentStore()
+            diagnostics.append("STORE-31 写入进入 Core Data context")
+            return try await context.perform {
+                do {
+                    let value = try work()
+                    if self.context.hasChanges {
+                        try self.context.save()
+                    }
+                    return value
+                } catch {
+                    self.context.rollback()
+                    throw RepositoryError(wrapping: error)
                 }
-                return value
-            } catch {
-                self.context.rollback()
-                throw RepositoryError(wrapping: error)
             }
+        } catch {
+            diagnostics.append("STORE-32 写入失败：\(error)")
+            throw error
         }
     }
 

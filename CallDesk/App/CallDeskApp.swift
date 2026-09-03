@@ -51,21 +51,10 @@ struct CallDeskApp: App {
         Task {
             await dependencies.performStartupMaintenance()
         }
-        // The Matcha model weighs ~126 MB; preload it in the background so
-        // the first tap-to-speak does not stall for several seconds. UI
-        // tests use a silent driver and skip the real engine entirely.
-        // Unit tests run in the host app too, so the preload is skipped
-        // there as well — the engine init alone takes over a second of
-        // simulator CPU and makes timing-sensitive tests flaky.
-        if !CommandLine.arguments.contains("-calldesk-ui-test"),
-           ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
-            Task.detached(priority: .utility) {
-                let settings = dependencies.settingsStore.load()
-                let synthesizer = MatchaSynthesizer.shared
-                await synthesizer.setNoiseScale(settings.voice.noiseScale)
-                await synthesizer.preload()
-            }
-        }
+        // The Matcha model is loaded lazily when an operator first makes a
+        // speech call. Loading its 126 MB model at launch competes with the
+        // primary calling screen on older iPhones, including iPhone 8 Plus
+        // on iOS 16, so startup must never preheat it in parallel.
     }
 
     var body: some Scene {

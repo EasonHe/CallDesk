@@ -107,6 +107,29 @@ struct CallingViewModelTests {
         #expect(viewModel.startupDiagnosticText.contains("TIMEOUT"))
     }
 
+    @Test("A synchronously stalled action repository does not block the loading timeout")
+    func synchronouslyStalledActionRepositoryStillTimesOut() async throws {
+        let fixture = try Fixture()
+        let repositories = fixture.repositories
+        let callService = DefaultCallService(
+            actions: repositories.actions,
+            history: repositories.history,
+            speechDriver: SilentCallSpeechDriver(utteranceDuration: 0)
+        )
+        let viewModel = CallingViewModel(
+            workspaces: repositories.workspaces,
+            boards: repositories.boards,
+            actions: SynchronouslyBlockedActionRepository(),
+            callService: callService,
+            history: repositories.history,
+            loadingDiagnosticDelay: .milliseconds(1),
+            loadingTimeout: .milliseconds(30)
+        )
+
+        #expect(await waitForFailedState(of: viewModel))
+        #expect(viewModel.startupDiagnosticText.contains("TIMEOUT CALL-05"))
+    }
+
     @Test("Loading a board without actions stays loaded with no actions")
     func loadBoardWithoutActionsKeepsLoadedState() async throws {
         let store = try InMemoryCallDeskStore(
@@ -1149,4 +1172,20 @@ private nonisolated struct DelayedWorkspaceRepository: WorkspaceRepository {
     func save(_ workspace: Workspace) async throws {}
 
     func delete(id: UUID) async throws {}
+}
+
+private nonisolated struct SynchronouslyBlockedActionRepository: CallActionRepository {
+    func fetch(boardID: UUID, includeDisabled: Bool) async throws -> [CallAction] {
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(200))
+        while ContinuousClock.now < deadline {}
+        return []
+    }
+
+    func action(id: UUID) async throws -> CallAction? { nil }
+
+    func save(_ action: CallAction) async throws {}
+
+    func delete(id: UUID) async throws {}
+
+    func reorder(boardID: UUID, orderedIDs: [UUID]) async throws {}
 }

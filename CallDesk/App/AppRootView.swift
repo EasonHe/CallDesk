@@ -64,9 +64,7 @@ struct AppRootView: View {
             // and action changes made from the other tabs.
             if newTab == .calling || newTab == .statistics {
                 statisticsRefreshToken += 1
-                Task {
-                    await callingViewModel.refresh()
-                }
+                callingViewModel.requestRefresh()
             }
         }
         .onChange(of: scenePhase) { newPhase in
@@ -76,9 +74,7 @@ struct AppRootView: View {
                 return
             }
             statisticsRefreshToken += 1
-            Task {
-                await callingViewModel.refresh()
-            }
+            callingViewModel.requestRefresh()
         }
     }
 
@@ -97,7 +93,8 @@ struct AppRootView: View {
     private var content: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                CallingView(dependencies: dependencies, viewModel: callingViewModel)
+                CallingView()
+                    .environmentObject(callingViewModel)
             }
             .tabItem {
                 Label(AppTab.calling.title, systemImage: AppTab.calling.systemImage)

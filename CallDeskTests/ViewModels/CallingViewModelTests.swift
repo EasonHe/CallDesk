@@ -44,6 +44,45 @@ struct CallingViewModelTests {
         #expect(viewModel.state == .empty)
     }
 
+    @Test("Scheduled initial loading reaches the empty state without configuration")
+    func scheduledInitialLoadWithoutConfigurationReportsEmpty() async throws {
+        let viewModel = Fixture.makeViewModel(store: try InMemoryCallDeskStore())
+
+        viewModel.requestRefresh()
+
+        #expect(await waitForEmptyState(of: viewModel))
+    }
+
+    @Test("A new empty calling view model loads without a view lifecycle callback")
+    func newEmptyViewModelLoadsWithoutLifecycleCallback() async throws {
+        let viewModel = Fixture.makeViewModel(store: try InMemoryCallDeskStore())
+
+        #expect(await waitForEmptyState(of: viewModel))
+    }
+
+    @Test("A stalled first load exposes its current diagnostic stage")
+    func stalledInitialLoadExposesDiagnosticStage() async throws {
+        let fixture = try Fixture()
+        let repositories = fixture.repositories
+        let callService = DefaultCallService(
+            actions: repositories.actions,
+            history: repositories.history,
+            speechDriver: SilentCallSpeechDriver(utteranceDuration: 0)
+        )
+        let viewModel = CallingViewModel(
+            workspaces: DelayedWorkspaceRepository(),
+            boards: repositories.boards,
+            actions: repositories.actions,
+            callService: callService,
+            history: repositories.history,
+            loadingDiagnosticDelay: .milliseconds(10)
+        )
+
+        viewModel.requestRefresh()
+
+        #expect(await waitForDiagnosticStage(.fetchingWorkspaces, of: viewModel))
+    }
+
     @Test("Loading a board without actions stays loaded with no actions")
     func loadBoardWithoutActionsKeepsLoadedState() async throws {
         let store = try InMemoryCallDeskStore(
@@ -883,6 +922,36 @@ struct CallingViewModelTests {
         return false
     }
 
+    private func waitForEmptyState(of viewModel: CallingViewModel) async -> Bool {
+        let clock = ContinuousClock()
+        // This asserts an eventual state transition, not a one-second
+        // performance budget. The full suite launches many Core Data stores
+        // concurrently on one simulator, which can briefly delay scheduling.
+        let deadline = clock.now.advanced(by: .seconds(3))
+        while clock.now < deadline {
+            if viewModel.state == .empty {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func waitForDiagnosticStage(
+        _ stage: CallingViewModel.LoadingStage,
+        of viewModel: CallingViewModel
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while clock.now < deadline {
+            if viewModel.loadingDiagnosticStage == stage {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
     @MainActor
     private struct Fixture {
         static let workspaceID = fixedUUID(1)
@@ -1031,4 +1100,17 @@ private nonisolated struct DelayedHistoryRepository: CallHistoryRepository {
     func deleteAll() async throws {}
 
     func enforceRetention(_ policy: HistoryRetentionPolicy, now: Date) async throws -> Int { 0 }
+}
+
+private nonisolated struct DelayedWorkspaceRepository: WorkspaceRepository {
+    func fetchAll() async throws -> [Workspace] {
+        try? await Task.sleep(for: .seconds(10))
+        return []
+    }
+
+    func workspace(id: UUID) async throws -> Workspace? { nil }
+
+    func save(_ workspace: Workspace) async throws {}
+
+    func delete(id: UUID) async throws {}
 }

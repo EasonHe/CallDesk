@@ -2,15 +2,9 @@ import SwiftUI
 import UIKit
 
 struct CallingView: View {
-    @ObservedObject private var viewModel: CallingViewModel
+    @EnvironmentObject private var viewModel: CallingViewModel
     @State private var undoConfirmation: UUID?
     @State private var pressedActionID: UUID?
-
-    /// The view model is owned by the app root so it survives tab switches
-    /// and can be refreshed when the operator returns from other tabs.
-    init(dependencies: AppDependencies, viewModel: CallingViewModel) {
-        _viewModel = ObservedObject(wrappedValue: viewModel)
-    }
 
     var body: some View {
         content
@@ -27,9 +21,6 @@ struct CallingView: View {
                 ToolbarItem(placement: .primaryAction) {
                     CallingToolbarButtons(viewModel: viewModel)
                 }
-            }
-            .task {
-                await viewModel.refresh()
             }
             .confirmationDialog(
                 "取消本次呼叫？",
@@ -64,8 +55,7 @@ struct CallingView: View {
     private var content: some View {
         switch viewModel.state {
         case .loading:
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            loadingView
         case .empty:
             FeatureEmptyStateView(
                 systemImage: "speaker.wave.2.fill",
@@ -76,11 +66,34 @@ struct CallingView: View {
             loadedView(loadedContent)
         case .failed:
             FeatureErrorStateView {
-                Task {
-                    await viewModel.load()
-                }
+                viewModel.retryLoading()
             }
         }
+    }
+
+    private var loadingView: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+
+            if let stage = viewModel.loadingDiagnosticStage {
+                VStack(spacing: 6) {
+                    Text("叫号加载未完成")
+                        .font(.headline)
+                    Text("诊断码：\(stage.diagnosticCode)")
+                        .font(.subheadline.monospaced())
+                    Text(stage.diagnosticMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("重新加载") {
+                        viewModel.retryLoading()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .multilineTextAlignment(.center)
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func loadedView(_ content: CallingViewModel.Content) -> some View {
@@ -555,10 +568,10 @@ struct CallingToolbarButtons: View {
 }
 
 #Preview {
+    let dependencies = AppDependencies.preview()
+
     NavigationStack {
-        CallingView(
-            dependencies: .preview(),
-            viewModel: CallingViewModel(dependencies: .preview())
-        )
+        CallingView()
+            .environmentObject(CallingViewModel(dependencies: dependencies))
     }
 }

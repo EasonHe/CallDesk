@@ -15,6 +15,43 @@ final class CallingViewModel: ObservableObject {
         }
     }
 
+    /// The latest boundary reached by a lifecycle-triggered panel load.
+    /// The code is intentionally compact so a TestFlight tester can send a
+    /// screenshot without needing a cable or device console.
+    enum LoadingStage: String, Equatable {
+        case refreshRequested
+        case restoringCalledMarkers
+        case fetchingWorkspaces
+        case fetchingBoards
+        case fetchingActions
+        case completed
+        case failed
+
+        var diagnosticCode: String {
+            switch self {
+            case .refreshRequested: "CALL-01"
+            case .restoringCalledMarkers: "CALL-02"
+            case .fetchingWorkspaces: "CALL-03"
+            case .fetchingBoards: "CALL-04"
+            case .fetchingActions: "CALL-05"
+            case .completed: "CALL-06"
+            case .failed: "CALL-07"
+            }
+        }
+
+        var diagnosticMessage: String {
+            switch self {
+            case .refreshRequested: "正在启动叫号页"
+            case .restoringCalledMarkers: "正在恢复本日状态"
+            case .fetchingWorkspaces: "正在读取本地数据"
+            case .fetchingBoards: "正在读取叫号内容"
+            case .fetchingActions: "正在读取叫号项"
+            case .completed: "加载已完成"
+            case .failed: "读取本地数据失败"
+            }
+        }
+    }
+
     /// Why the last call did not announce anything.
     enum CallOutcomeFailure: Equatable {
         /// The audio session was taken over mid-announcement (a phone call,
@@ -26,6 +63,8 @@ final class CallingViewModel: ObservableObject {
 
     @Published private(set) var state: FeatureLoadState<Content> = .loading
     @Published private(set) var liveCall: LiveCallState = .idle
+    /// Shown only when loading has exceeded the diagnostic delay.
+    @Published private(set) var loadingDiagnosticStage: LoadingStage?
 
     /// Action IDs that have completed a call. The calling view uses this to
     /// tint called tiles so the operator can see at a glance which numbers
@@ -83,6 +122,16 @@ final class CallingViewModel: ObservableObject {
     /// Keeps the nightly reset loop alive; cancelled together with the
     /// view model so previews and tests never leave stray tasks behind.
     private var midnightResetTask: Task<Void, Never>?
+    /// Owns lifecycle-triggered refresh work so it outlives SwiftUI view
+    /// tasks. On iOS 16 a tab's `.task` can be cancelled during the initial
+    /// TabView transition, which otherwise leaves the initial `.loading`
+    /// state with no task left to advance it.
+    private var refreshTask: Task<Void, Never>?
+    private var refreshTaskID: UUID?
+    private var loadingDiagnosticTask: Task<Void, Never>?
+    private var currentLoadingStage: LoadingStage?
+    private let loadingDiagnosticDelay: Duration
+    private let diagnosticsDefaults: UserDefaults
     private var hasLoaded = false
     /// The action ID that was active most recently; used to detect the
     /// moment a call transitions from "in-flight" to "completed" so the
@@ -103,7 +152,9 @@ final class CallingViewModel: ObservableObject {
         calledMarkers: any CalledMarkersStoring = InMemoryCalledMarkersStore(),
         settingsStore: any SettingsStore = UserDefaultsSettingsStore(),
         calendar: Calendar = .current,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        loadingDiagnosticDelay: Duration = .seconds(3),
+        diagnosticsDefaults: UserDefaults = .standard
     ) {
         self.workspaces = workspaces
         self.boards = boards
@@ -113,6 +164,8 @@ final class CallingViewModel: ObservableObject {
         self.calledMarkers = calledMarkers
         self.calendar = calendar
         self.now = now
+        self.loadingDiagnosticDelay = loadingDiagnosticDelay
+        self.diagnosticsDefaults = diagnosticsDefaults
         liveCall = callService.liveCallState
         lastActiveActionID = liveCall.actionID
         liveCallSubscription = callService.liveCallStatePublisher
@@ -127,6 +180,11 @@ final class CallingViewModel: ObservableObject {
         let loadedSettings = settingsStore.load()
         hapticFeedbackEnabled = loadedSettings.voice.hapticFeedback
         showsActionDetail = loadedSettings.display.showsActionDetail
+
+        // A fresh installation must make progress even when SwiftUI has not
+        // delivered a child tab lifecycle callback yet (notably on iOS 16).
+        // `requestRefresh()` already coalesces later root lifecycle signals.
+        requestRefresh()
     }
 
     convenience init(dependencies: AppDependencies) {
@@ -187,10 +245,42 @@ final class CallingViewModel: ObservableObject {
         await load(restoringUndoTargetBeforeContent: true)
     }
 
+    /// Requests a refresh that belongs to the view model rather than to an
+    /// individual SwiftUI view. Repeated lifecycle signals coalesce while a
+    /// refresh is running, avoiding concurrent reads that can race on older
+    /// TabView implementations.
+    func requestRefresh() {
+        guard refreshTask == nil else {
+            return
+        }
+        let taskID = UUID()
+        refreshTaskID = taskID
+        beginLoadingDiagnostics()
+        updateLoadingStage(.refreshRequested)
+        refreshTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.refresh()
+            self.finishRefreshTask(id: taskID)
+        }
+    }
+
+    /// Starts a fresh lifecycle request after a diagnostic timeout. A stale
+    /// request is cancelled first; its eventual result is harmless because
+    /// both requests read the same local snapshot.
+    func retryLoading() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        refreshTaskID = nil
+        requestRefresh()
+    }
+
     private func load(restoringUndoTargetBeforeContent: Bool) async {
         hasLoaded = true
         state = .loading
         os_log(.info, log: Self.loadLog, "calling-load: started")
+        updateLoadingStage(.restoringCalledMarkers)
         // Restore which tiles were already announced on a previous run so a
         // fresh session does not lose the called progress. Opening the app
         // on a new day yields an empty set, so yesterday's markers drop
@@ -312,6 +402,7 @@ final class CallingViewModel: ObservableObject {
 
     private func reloadContent() async {
         do {
+            updateLoadingStage(.fetchingWorkspaces)
             os_log(.info, log: Self.loadLog, "calling-load: fetching workspaces")
             let workspaces = try await workspaces.fetchAll()
             os_log(.info, log: Self.loadLog, "calling-load: fetched %{public}ld workspaces", workspaces.count)
@@ -320,6 +411,7 @@ final class CallingViewModel: ObservableObject {
                 state = .empty
                 return
             }
+            updateLoadingStage(.fetchingBoards)
             os_log(.info, log: Self.loadLog, "calling-load: fetching boards")
             let visibleBoards = try await boards.fetchAll(
                 workspaceID: workspace.id,
@@ -332,6 +424,7 @@ final class CallingViewModel: ObservableObject {
                 return
             }
             let selectedBoardID = retainedSelectedBoardID(in: visibleBoards) ?? firstBoard.id
+            updateLoadingStage(.fetchingActions)
             os_log(.info, log: Self.loadLog, "calling-load: fetching actions")
             let boardActions = try await actions.fetch(
                 boardID: selectedBoardID,
@@ -346,11 +439,50 @@ final class CallingViewModel: ObservableObject {
                     actions: boardActions
                 )
             )
+            updateLoadingStage(.completed)
         } catch {
             os_log(.error, log: Self.loadLog, "calling-load: failed: %{public}@", "\(error)")
             state = .failed
+            updateLoadingStage(.failed)
         }
     }
+
+    private func beginLoadingDiagnostics() {
+        loadingDiagnosticTask?.cancel()
+        loadingDiagnosticStage = nil
+        loadingDiagnosticTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: self?.loadingDiagnosticDelay ?? .seconds(3))
+            } catch {
+                return
+            }
+            guard let self, self.refreshTask != nil else {
+                return
+            }
+            self.loadingDiagnosticStage = self.currentLoadingStage
+        }
+    }
+
+    private func finishRefreshTask(id: UUID) {
+        guard refreshTaskID == id else {
+            return
+        }
+        refreshTask = nil
+        refreshTaskID = nil
+        loadingDiagnosticTask?.cancel()
+        loadingDiagnosticTask = nil
+        loadingDiagnosticStage = nil
+    }
+
+    private func updateLoadingStage(_ stage: LoadingStage) {
+        currentLoadingStage = stage
+        diagnosticsDefaults.set(stage.diagnosticCode, forKey: Self.loadingDiagnosticDefaultsKey)
+        if loadingDiagnosticStage != nil {
+            loadingDiagnosticStage = stage
+        }
+    }
+
+    private nonisolated static let loadingDiagnosticDefaultsKey = "callingLoadDiagnosticStage"
 
     /// Keeps the user's board selection across refreshes while the board
     /// still exists; otherwise selection falls back to the first board.

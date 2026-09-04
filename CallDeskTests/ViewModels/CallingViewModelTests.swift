@@ -53,11 +53,16 @@ struct CallingViewModelTests {
         #expect(await waitForEmptyState(of: viewModel))
     }
 
-    @Test("A new empty calling view model loads without a view lifecycle callback")
-    func newEmptyViewModelLoadsWithoutLifecycleCallback() async throws {
+    @Test("A new calling view model waits for the calling surface to request its initial load")
+    func newCallingViewModelWaitsForInitialLoadRequest() async throws {
         let viewModel = Fixture.makeViewModel(store: try InMemoryCallDeskStore())
 
-        #expect(await waitForEmptyState(of: viewModel))
+        // The calling surface must subscribe before it triggers this work.
+        // Starting the task in the initializer lets a fast Release build
+        // complete before an iOS 16 TabView child has observed the state.
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(viewModel.state == .loading)
     }
 
     @Test("A stalled first load exposes its current diagnostic stage")
@@ -101,6 +106,8 @@ struct CallingViewModelTests {
             loadingDiagnosticDelay: .milliseconds(1),
             loadingTimeout: .milliseconds(30)
         )
+
+        viewModel.requestRefresh()
 
         #expect(await waitForFailedState(of: viewModel))
         #expect(viewModel.startupDiagnosticText.contains("CALL-03 正在读取本地数据"))

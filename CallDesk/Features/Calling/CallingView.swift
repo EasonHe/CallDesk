@@ -53,6 +53,14 @@ struct CallingView: View {
             } message: {
                 Text("无法删除这条呼叫记录，请稍后再试。")
             }
+            .onAppear {
+                // Start only after this TabView child has installed its
+                // observation. A Release build can complete an empty local
+                // fetch before iOS 16 has subscribed during view creation.
+                // The view model owns and coalesces the actual task, so
+                // repeated appearances are safe.
+                viewModel.requestRefresh()
+            }
     }
 
     @ViewBuilder

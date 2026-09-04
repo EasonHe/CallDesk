@@ -196,11 +196,6 @@ final class CallingViewModel: ObservableObject {
         hapticFeedbackEnabled = loadedSettings.voice.hapticFeedback
         showsActionDetail = loadedSettings.display.showsActionDetail
         recordStartupDiagnostic("CALL-00 叫号加载器已创建")
-
-        // A fresh installation must make progress even when SwiftUI has not
-        // delivered a child tab lifecycle callback yet (notably on iOS 16).
-        // `requestRefresh()` already coalesces later root lifecycle signals.
-        requestRefresh()
     }
 
     convenience init(dependencies: AppDependencies) {

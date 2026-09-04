@@ -571,7 +571,11 @@ final class CallingViewModel: ObservableObject {
     private func recordStartupDiagnostic(_ message: String) {
         startupDiagnostics.append(message)
         startupDiagnosticLines = startupDiagnostics.snapshot()
-        os_log(.info, log: Self.loadLog, "calling-trace: %{public}@", message)
+        // Keep the compact load boundary available to a wired iOS 16 device
+        // capture. `info` messages can be omitted by the release logging
+        // configuration, while the default level remains visible to Xcode
+        // Instruments without exposing anything in the user interface.
+        os_log(.default, log: Self.loadLog, "calling-trace: %{public}@", message)
     }
 
     private nonisolated static let loadingDiagnosticDefaultsKey = "callingLoadDiagnosticStage"

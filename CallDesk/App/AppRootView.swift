@@ -100,8 +100,7 @@ struct AppRootView: View {
     private var content: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                CallingView()
-                    .environmentObject(callingViewModel)
+                CallingView(viewModel: callingViewModel)
             }
             .tabItem {
                 Label(AppTab.calling.title, systemImage: AppTab.calling.systemImage)

@@ -2,9 +2,13 @@ import SwiftUI
 import UIKit
 
 struct CallingView: View {
-    @EnvironmentObject private var viewModel: CallingViewModel
+    @ObservedObject private var viewModel: CallingViewModel
     @State private var undoConfirmation: UUID?
     @State private var pressedActionID: UUID?
+
+    init(viewModel: CallingViewModel) {
+        _viewModel = ObservedObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         content
@@ -580,7 +584,6 @@ struct CallingToolbarButtons: View {
     let dependencies = AppDependencies.preview()
 
     NavigationStack {
-        CallingView()
-            .environmentObject(CallingViewModel(dependencies: dependencies))
+        CallingView(viewModel: CallingViewModel(dependencies: dependencies))
     }
 }

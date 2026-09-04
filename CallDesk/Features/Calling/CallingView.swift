@@ -1,19 +1,11 @@
-import Combine
 import SwiftUI
 import UIKit
 
-struct CallingView: View {
-    private let viewModel: CallingViewModel
-    @StateObject private var screenState: CallingScreenState
+struct CallingScreenContent: View {
+    let viewModel: CallingViewModel
+    let state: FeatureLoadState<CallingViewModel.Content>
     @State private var undoConfirmation: UUID?
     @State private var pressedActionID: UUID?
-
-    init(viewModel: CallingViewModel) {
-        self.viewModel = viewModel
-        _screenState = StateObject(
-            wrappedValue: CallingScreenState(initialState: viewModel.state)
-        )
-    }
 
     var body: some View {
         content
@@ -58,31 +50,11 @@ struct CallingView: View {
             } message: {
                 Text("无法删除这条呼叫记录，请稍后再试。")
             }
-            .onReceive(viewModel.$state) { state in
-                screenState.apply(state)
-            }
-            .onReceive(viewModel.objectWillChange.receive(on: RunLoop.main)) { _ in
-                screenState.invalidate()
-            }
-            .onAppear {
-                // Start only after this TabView child has installed its
-                // observation. A Release build can complete an empty local
-                // fetch before iOS 16 has subscribed during view creation.
-                // The view model owns and coalesces the actual task, so
-                // repeated appearances are safe.
-                screenState.apply(viewModel.state)
-                viewModel.requestRefresh()
-            }
     }
 
     @ViewBuilder
     private var content: some View {
-        // Other presentation values (called markers, live-call state) still
-        // belong to the view model. Reading this local revision ensures those
-        // updates redraw this screen without relying on an external
-        // `@ObservedObject` invalidation.
-        let _ = screenState.revision
-        switch screenState.state {
+        switch state {
         case .loading:
             loadingView
         case .empty:

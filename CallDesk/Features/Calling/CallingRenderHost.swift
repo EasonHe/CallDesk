@@ -2,6 +2,19 @@ import Combine
 import SwiftUI
 import UIKit
 
+/// The UIKit ownership boundary for the primary calling screen. The host
+/// guarantees that iOS 16 receives a concrete replacement view when the
+/// long-lived calling view model changes state.
+struct CallingView: UIViewControllerRepresentable {
+    let viewModel: CallingViewModel
+
+    func makeUIViewController(context: Context) -> CallingRenderHostController {
+        CallingRenderHostController(viewModel: viewModel)
+    }
+
+    func updateUIViewController(_ controller: CallingRenderHostController, context: Context) {}
+}
+
 /// Bridges calling state into a UIKit-owned host. On iOS 16 this avoids
 /// relying on a TabView child to observe a long-lived SwiftUI object during
 /// its first render.
@@ -76,6 +89,8 @@ final class CallingRenderHostController: UIViewController {
             return
         }
         renderedState = state
-        contentHost.rootView = AnyView(EmptyView())
+        contentHost.rootView = AnyView(
+            CallingScreenContent(viewModel: viewModel, state: state)
+        )
     }
 }

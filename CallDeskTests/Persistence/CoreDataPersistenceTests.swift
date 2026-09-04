@@ -1,3 +1,5 @@
+import CoreData
+import Dispatch
 import Foundation
 import Testing
 @testable import CallDesk
@@ -38,6 +40,63 @@ struct CoreDataPersistenceTests {
 
         await readinessGate.open()
         #expect(try await fetch.value == [])
+    }
+
+    @Test("Action reads complete while an earlier Core Data context is busy")
+    func actionReadsCompleteWhileEarlierContextIsBusy() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let repositories = CoreDataRepositories(persistence: persistence)
+        let workspaceID = coreDataFixedUUID(20)
+        let boardID = coreDataFixedUUID(21)
+        let action = try CallAction(
+            id: coreDataFixedUUID(22),
+            boardID: boardID,
+            title: "A001",
+            speechText: "A001"
+        )
+        try await repositories.workspaces.save(Workspace(id: workspaceID, name: "Operations"))
+        try await repositories.boards.save(
+            CallBoard(id: boardID, workspaceID: workspaceID, name: "Queue", sortOrder: 0)
+        )
+        try await repositories.actions.save(action)
+
+        let blockedContext = persistence.newBackgroundContext()
+        let store = CoreDataCallDeskStore(
+            context: blockedContext,
+            waitForPersistentStore: { await persistence.waitUntilReady() }
+        )
+        let blockerStarted = DispatchSemaphore(value: 0)
+        let releaseBlocker = DispatchSemaphore(value: 0)
+        let blocker = Task.detached {
+            blockedContext.performAndWait {
+                blockerStarted.signal()
+                _ = waitForSignal(releaseBlocker, timeout: .seconds(1))
+            }
+        }
+        let didStartBlocking = await Task.detached {
+            waitForSignal(blockerStarted, timeout: .seconds(1))
+        }.value
+        #expect(didStartBlocking)
+
+        let completion = ActionFetchCompletion()
+        let fetch = Task {
+            await completion.store(
+                try? await store.fetchActions(boardID: boardID, includeDisabled: true)
+            )
+        }
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(250))
+        while clock.now < deadline, (await completion.value) == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let fetchedActions = await completion.value
+
+        releaseBlocker.signal()
+        await blocker.value
+        await fetch.value
+
+        #expect(fetchedActions == [action])
     }
 
     @Test("Data saved through one repository set survives recreating the repositories")
@@ -170,6 +229,21 @@ struct CoreDataPersistenceTests {
         let coreDataTemplates = try await context.repositories.templates.fetchAll(includeBuiltIn: true)
         let inMemoryTemplates = try await inMemory.templates.fetchAll(includeBuiltIn: true)
         #expect(coreDataTemplates == inMemoryTemplates)
+    }
+}
+
+private func waitForSignal(
+    _ semaphore: DispatchSemaphore,
+    timeout: DispatchTimeInterval
+) -> Bool {
+    semaphore.wait(timeout: .now() + timeout) == .success
+}
+
+private actor ActionFetchCompletion {
+    private(set) var value: [CallAction]?
+
+    func store(_ value: [CallAction]?) {
+        self.value = value
     }
 }
 

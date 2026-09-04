@@ -125,10 +125,18 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     // MARK: - Actions
 
     func fetchActions(boardID: UUID, includeDisabled: Bool) async throws -> [CallAction] {
+        // Keep the primary calling read independent from any previous
+        // repository operation. On iOS 16, a private context can occasionally
+        // stop scheduling a later closure even after earlier reads completed.
+        // This is a read-only snapshot, so an operation-scoped context is both
+        // safe and prevents the calling surface from inheriting that queue.
+        let actionReadContext = isolatedReadContext()
         diagnostics.append("ACTION-02 已进入叫号项存储方法")
-        return try await performRead {
+        return try await performRead(on: actionReadContext) {
             self.diagnostics.append("ACTION-03 叫号项查询闭包已开始")
-            let entities = try self.entities(CDCallAction.self, format: "boardID == %@", boardID)
+            let request = NSFetchRequest<CDCallAction>(entityName: "CDCallAction")
+            request.predicate = NSPredicate(format: "boardID == %@", boardID as CVarArg)
+            let entities = try actionReadContext.fetch(request)
             self.diagnostics.append("ACTION-04 叫号项实体读取完成：\(entities.count) 个")
             let actions = try entities
                 .map { try $0.domainValue() }
@@ -409,13 +417,15 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
     // MARK: - Context scheduling
 
     private func performRead<Value: Sendable>(
+        on operationContext: NSManagedObjectContext? = nil,
         _ work: @escaping @Sendable () throws -> Value
     ) async throws -> Value {
         diagnostics.append("STORE-10 查询等待数据库就绪")
         do {
             await waitForPersistentStore()
             diagnostics.append("STORE-11 查询进入 Core Data context")
-            let value = try await context.perform {
+            let scheduledContext = operationContext ?? self.context
+            let value = try await scheduledContext.perform {
                 do {
                     return try work()
                 } catch {
@@ -428,6 +438,19 @@ nonisolated final class CoreDataCallDeskStore: @unchecked Sendable {
             diagnostics.append("STORE-12 查询失败：\(error)")
             throw error
         }
+    }
+
+    /// Creates a short-lived private context backed by the same persistent
+    /// store coordinator. Domain values leave it before the operation returns,
+    /// so it never needs to merge changes into a view context.
+    private func isolatedReadContext() -> NSManagedObjectContext {
+        guard let coordinator = context.persistentStoreCoordinator else {
+            return context
+        }
+        let isolatedContext = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
+        isolatedContext.persistentStoreCoordinator = coordinator
+        isolatedContext.mergePolicy = NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
+        return isolatedContext
     }
 
     func recordDiagnostic(_ message: String) {

@@ -36,7 +36,8 @@
 @MainActor
 @Test("The render host replaces its initial loading snapshot with an empty result")
 func emptyResultReplacesInitialSnapshot() async {
-    let viewModel = CallingViewModel(dependencies: .preview())
+    let repositories = try! InMemoryRepositories.empty()
+    let viewModel = CallingViewModel(dependencies: AppDependencies(repositories: repositories))
     let host = CallingRenderHostController(viewModel: viewModel)
     host.loadViewIfNeeded()
 
